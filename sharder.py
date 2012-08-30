@@ -4,8 +4,9 @@
 """
 __author__ = "Jeremy Nelson"
 
-import sys,argparse,datetime
-sys.path.append("marc4j.jar") # Assumes MARC4j jar is in the same directory
+import sys,argparse,datetime,os
+sys.path.append(os.path.join("lib",
+                             "marc4j.jar")) # Assumes MARC4j jar is in the same directory
 import java.io.FileInputStream as FileInputStream
 import java.io.FileOutputStream as FileOutputStream
 import org.marc4j as marc4j
@@ -24,8 +25,9 @@ def shard(shard_size,input_marc_filename):
     marc_file = FileInputStream(input_marc_filename)
     marc_reader = marc4j.MarcStreamReader(marc_file)
     count,error_count = 0,0
-    marc_output_filename = 'shard-{0}k-{1}.mrc'.format(count,
-                                                       count+shard_size)
+    marc_output_filename = os.path.join('shards',
+                                        'shard-{0}k-{1}.mrc'.format(count,
+                                                                    count+shard_size))
     marc_writer = marc4j.MarcStreamWriter(FileOutputStream(marc_output_filename))
     error_log = open('errors.log','w')
     while marc_reader.hasNext():
@@ -35,7 +37,9 @@ def shard(shard_size,input_marc_filename):
             marc_writer.write(record)
             if not count%shard_size: # Close current output file and open new
                 marc_writer.close()
-                new_output_filename = 'shard-{0}k-{1}.mrc'.format(count,shard_size+count)
+                new_output_filename = os.path.join('shards',
+                                                   'shard-{0}k-{1}.mrc'.format(count,
+                                                                               shard_size+count))
                 output_file = FileOutputStream(new_output_filename)
                 print("Starting new shard {0}".format(new_output_filename))
                 marc_writer = marc4j.MarcStreamWriter(output_file)

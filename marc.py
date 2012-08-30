@@ -1,20 +1,33 @@
+"""
+  `mod`:marc - A jython MARC record parser, loosely based on heavily
+  customized MARC parser in the
+  `Aristotle Discovery Layer <https://github.com/jermnelson/Discover-Aristotle>`_
+  with MARC4J and SolrJ Java libraries to improve unicode processing in
+  a MARC 21 record load
+"""
 
 
-"""Helpers for MARC processing."""
-
-import csv,re,sys,time,datetime
-sys.path.append("marc4j.jar") # Assumes MARC4j jar is in the same directory
+import csv,re,sys,time,datetime,os
+PROJECT_DIR = os.getcwd()
+JAR_DIR = os.path.join(PROJECT_DIR,
+                       "lib")
+for jar_file in os.listdir(JAR_DIR):
+    sys.path.append(os.path.join(JAR_DIR,
+                                 jar_file))
 import java.io.FileInputStream as FileInputStream
 import java.io.FileOutputStream as FileOutputStream
 import org.marc4j as marc4j
+import org.apache.solr.client.solrj.SolrServerException as SolrServerException
+import org.apache.solr.client.solrj.impl.CommonsHttpSolrServer as CommonsHttpSolrServer
+import org.apache.solr.common.SolrInputDocument as SolrInputDocument
 import unicodedata,urllib,logging
-##from erm_update import load_csv
+from erm_update import load_csv
 
 ##logging.basicConfig(filename='%slog/%s-marc-solr-indexer.log' % (settings.BASE_DIR,
 ##                                                                 datetime.datetime.today().strftime('%Y%m%d-%H')),
 ##                    level=logging.INFO)
 
-##ELECTRONIC_JRNLS = load_csv()
+ELECTRONIC_JRNLS = load_csv()
 
 
 try:
@@ -80,6 +93,32 @@ FIELDNAMES = [
 
 access_search = re.compile(r'ewww')
 
+def normalize(value):
+    """
+    Function normalizes value by replacing periods, commas, semi-colons,
+    and colons.
+
+    :param value: Raw value
+    :rtype: String with punctuations removed
+    """
+    if value:
+        return value.replace('.', '').strip(',:/; ')
+
+def subfield_list(field, subfield_indicator):
+    """
+    Method takes MARC field and subfield values and returns
+    a list of the subfield values
+    
+    :param field: MARC field
+    :param subfield_indicator: List or char of subfields
+    :rtype: List
+    """
+    subfields = field.getSubfields(subfield_indicator)
+    if subfields is not None:
+        return [normalize(subfield.getData()) for subfield in subfields]
+    else:
+        return []
+
 def format_field(field):
     """
     Helper function takes a field and iterates through following
@@ -122,9 +161,15 @@ def get_author(record):
     """
     field100 = record.getVariableField('100')
     if field100 is not None:
-        return 
+        return format_field(field100)
     field110 = record.getVariableField('110')
+    if field110 is not None:
+        return format_field(field110)
     field111 = record.getVariableField('111')
+    if field111 is not None:
+        return format_field(field111)
+    return None
+    
     
 
 def get_format(record):
@@ -370,17 +415,19 @@ def get_subject_names(record):
         name = field.getSubfield('a')
         titles = field.getSubfields('c')
         for title in titles:
-            name = '{0} {1}'.format(title.getData(),
+            name_str = '{0} {1}'.format(title.getData(),
                                     name.getData())
+            output.append(name_str)
         numeration = field.getSubfields('b')
         for number in numeration:
-            name = '%s %s' % (name.getData(),
+            name_str = '%s %s' % (name.getData(),
                               number.getData())
+            output.append(name_str)
         dates = field.getSubfields('d')
         for date in dates:
-            name = '%s %s' % (name.getData(),
-                              date.getData())
-        output.append(name)
+            name_str = '%s %s' % (name.getData(),
+                                  date.getData())
+            output.append(name_str)       
     return output
 
 def parse_008(record, marc_record):
@@ -435,7 +482,7 @@ def parse_008(record, marc_record):
         try:
             record['language'] = marc_maps.LANGUAGE_CODING_MAP[language_code]
         except KeyError:
-            record['language'] = ''
+            record['language']= ''
     return record
 
 def id_match(id_fields, id_re):
@@ -448,7 +495,11 @@ def id_match(id_fields, id_re):
     """
     id_list = []
     for field in id_fields:
-        id_str = normalize(field['a'])
+        subfield_a = field.getSubfield('a')
+        if subfield_a is not None:
+            id_str = normalize(field.getSubfield('a').getData())
+        else:
+            id_str = None
         if id_str:
             id_match = id_re.match(id_str)
             if id_match:
@@ -466,7 +517,7 @@ def get_languages(language_codes):
     """
     split_codes = []
     for code in language_codes:
-        code = code.lower()
+        code = code.getData().lower()
         if len(code) > 3:
             split_code = [code[k:k+3] for k in range(0, len(code), 3)]
             split_codes.extend(split_code)
@@ -565,6 +616,7 @@ def get_location(record):
     the tutt_maps LOCATION_CODE_MAP dict"""
     output = []
     locations = record.getVariableFields('994')
+    code = None
     for row in locations:
         try:
             locations_raw = row.getSubfields('a')
@@ -575,11 +627,67 @@ def get_location(record):
                     output.append("Special Collections")
                 if code in tutt_maps.GOVDOCS_COLLECTIONS:
                     output.append("Government Documents")
-        except KeyError:
-            logging.info("%s Location unknown=%s" % (record.get,locations[0].value()))
+        except KeyError,e:
+            logging.info("{0} Location unknown={1}".format(format_field(record.getVariableField('245')),
+                                                           e))
             output.append('Unknown')
     return set(output)
-        
+
+def get_subjects(marc_record,record):
+    """
+    Helper function extracts all 6xx subject fields and adds to
+    various facets in the record dict
+
+    :param marc_record: MARC record
+    :param record: Dictionary of indexed values
+    :rtype dict: Returns modified record dict
+    """
+    subject_fields = []  # gets all 65X fields
+    for tag in ['600', '610', '611', '630', '648', '650',
+                '651', '653', '654', '655', '656', '657',
+                '658', '662', '690',
+                '691', '696', '697', '698', '699']:
+        all_fields = marc_record.getVariableFields(tag)
+        subject_fields.extend(all_fields)
+    eras = []
+    genres = []
+    topics = []
+    places = []
+    full_lc_subjects = []
+    for field in subject_fields:
+        genres.extend(subfield_list(field, 'v'))
+        topics.extend(subfield_list(field, 'x'))
+        eras.extend(subfield_list(field,'y'))
+        places.extend(subfield_list(field, 'z'))
+        subfield_a = field.getSubfield('a').getData()
+        if field.tag == '650':
+            if subfield_a != 'Video recordings for the hearing impaired.':
+                topics.append(normalize(subfield_a))
+        elif field.tag == '651':
+            if subfield_a != 'Video recordings for the hearing impaired.':
+                places.append(normalize(subfield_a))
+        elif field.tag == '655':
+            if subfield_a != 'Video recordings for the hearing impaired.':
+                genres.append(normalize(subfield_a))
+        lc_header = ''
+        for subfield_indicator in ('a', 'v', 'x', 'y', 'z'):
+            subfield_value = subfield_list(field,subfield_indicator)
+            for subfield in  subfield_value:
+                lc_header += '%s -- ' % subfield
+        if lc_header[-3:] == '-- ':
+            lc_header = lc_header[:-3]
+        full_lc_subjects.append(lc_header)
+        #    more_topics = subfield_list(subfield_indicator)
+        #    topics.extend(more_topics)
+    # Process through Subject name fields and add to topics
+    topics.extend(get_subject_names(marc_record))
+    record['genre'] = set(genres)
+    record['topic'] = set(topics)
+    record['place'] = set(places)
+    record['era'] = set(eras)
+    record['full_lc_subject'] = set(full_lc_subjects)
+    return record
+    
 def get_record(marc_record, ils=None):
     """
     Pulls the fields from a MARCReader record into a dictionary.
@@ -608,7 +716,7 @@ def get_record(marc_record, ils=None):
                       if sub_a.startswith('b') and len(sub_a) == 8:
                           record['id'] = sub_a
             else:
-                record['id'] = bib_id[1:-1]            
+                record['id'] = bib_id[1:-1]
     
     except AttributeError:
         # try other fields for id?
@@ -622,9 +730,10 @@ def get_record(marc_record, ils=None):
     if ELECTRONIC_JRNLS.has_key(record['id']):
         record_result = ELECTRONIC_JRNLS[record['id']]
         try:
-            record.update(record_result)
+            record.expand(record_result)
         except:
             print("ERROR updating record {0}".format(sys.exc_info()[0]))
+##    print("\tafter elect_jrnls")
     all999s = marc_record.getVariableFields('999')
     for field999 in all999s:
         suppressed_codes = field999.getSubfields('f')
@@ -632,24 +741,26 @@ def get_record(marc_record, ils=None):
             if code.getData() == 'n':
                 logging.error("NOT INDEXING %s RECORD SUPPRESSED" % record['id'])
                 return
-    record['format'] = get_format(marc_record)
-
     # should ctrl_num default to 001 or 035?
     field001 = marc_record.getVariableField('001')
     if field001 is not None:
         record['ctrl_num'] = field001.getData()
-    # there should be a test here for the 001 to start with 'oc'
-    try:
-        oclc_number =field001.getData()
-        oclc_number = oclc_number.replace("|a","")
-    except AttributeError:
-        oclc_number = ''
-    record['oclc_num'] = oclc_number
+        # there should be a test here for the 001 to start with 'oc'
+        try:
+            oclc_number = field001.getData()
+            oclc_number = oclc_number.replace("|a","")
+        except AttributeError:
+            oclc_number = ''
+        record['oclc_num'] = oclc_number
+##    print("\tafter oclc_num")
     record = parse_008(record, marc_record)
     isbn_fields = marc_record.getVariableFields('020')
+##    print("\tafter isbn_fields")
     record['isbn'] = id_match(isbn_fields, ISBN_RE)
+##    print("\tafter isbn")
     upc_fields = marc_record.getVariableFields('024')
     record['upc'] = id_match(upc_fields, UPC_RE)
+##    print("\tafter upc")
     field041 = marc_record.getVariableField('041')
     if field041 is not None:
         language_dubbed_codes = field041.getSubfields('a')
@@ -663,8 +774,10 @@ def get_record(marc_record, ils=None):
         if languages_subtitles:
             record['language_subtitles'] = languages_subtitles
     record['access'] = get_access(marc_record)
-    record['author'] = get_author()
+    record['author'] = get_author(marc_record)
+##    print("\tafter author")
     record['callnum'] = get_callnumber(marc_record)
+##    print("\tafter callnum")
     record['callnumlayerone'] = record['callnum']
     if record.has_key('holdings'):
         record['holdings'].extend(get_holdings(marc_record))
@@ -673,6 +786,7 @@ def get_record(marc_record, ils=None):
     record['item_ids'] = get_items(marc_record,ils)
     record['lc_firstletter'] = get_lcletter(marc_record)
     record['location'] = get_location(marc_record)
+##    print("\tafter location")
     # are there any subfields we don't want for the full_title?
     field245 = marc_record.getVariableField('245')
     if field245 is not None:
@@ -687,95 +801,81 @@ def get_record(marc_record, ils=None):
         #title_sort = unicodedata.normalize('NFKD', title_sort)
         record['title_sort'] = title_sort
         record['title'] = field245.getSubfield('a').getData().strip(' /:;')
+##    print("\tafter 245")
     field260 = marc_record.getVariableField('260')
     if field260 is not None:
         record['imprint'] = format_field(field260)
-        record['publisher_location'] = normalize(field260.getSubfields('a').getData())
-        record['publisher'] = normalize(field260.getSubfields('b').getData())
+        subfield_a = field260.getSubfield('a')
+        if subfield_a is not None:
+            record['publisher_location'] = normalize(subfield_a.getData())
+        subfield_b = field260.getSubfield('b')
+        if subfield_b is not None:
+            record['publisher'] = normalize(subfield_b.getData())
+##        print("\tafter publisher")
         # grab date from 008
         #if marc_record['260']['c']:
         #    date_find = DATE_RE.search(marc_record['260']['c'])
         #    if date_find:
         #        record['date'] = date_find.group()
 
-    description_fields = marc_record.get_fields('300')
-    record['description'] = [field.value() for field in description_fields]
-    
-    series_fields = marc_record.get_fields('440', '490')
-    record['series'] = multi_field_list(series_fields, ['a','v'])
-
-    notes_fields = marc_record.get_fields('500','501','502','503','504','505','506','507',
-                                          '509','510','512','513','514','515','516','517',
-                                          '518','519','521','545','547','590')
-    record['notes'] = [field.value() for field in notes_fields]
-    
-    contents_fields = marc_record.get_fields('505')
-    record['contents'] = multi_field_list(contents_fields, 'a')
-    
-    summary_fields = marc_record.get_fields('520')
-    record['summary'] = [field.value() for field in summary_fields]
+    description_fields = marc_record.getVariableFields('300')
+##    print("\tafter desc")
+    record['description'] = [format_field(field) for field in description_fields]
+    record['series'] = []
+    for tag in ('440', '490'):
+        series_fields = marc_record.getVariableFields(tag)
+        for field in series_fields:
+            subfield_a = field.getSubfield('a')
+            if subfield_a is not None:
+                record['series'].append(subfield_a.getData())
+            subfield_v = field.getSubfield('v')
+            if subfield_v is not None:
+                record['series'].append(subfield_v.getData())
+##    print("\tafter series")
+    record['notes'] = []
+    for tag in ('500','501','502','503','504','505','506','507',
+                '509','510','512','513','514','515','516','517',
+                '518','519','521','545','547','590'):
+        note_fields  = marc_record.getVariableFields(tag)
+        for field in note_fields:
+            record['notes'].append(format_field(field))
+##    print("\tafter notes") 
+    contents_fields = marc_record.getVariableFields('505')
+    record['contents'] = []
+    for field in contents_fields:
+        subfield_a = field.getSubfield('a')
+        if subfield_a is not None:
+            record['contents'].append(subfield_a.getData())
+    summary_fields = marc_record.getVariableFields('520')
+    record['summary'] = [format_field(field) for field in summary_fields]
        
-    subjentity_fields = marc_record.get_fields('610')
-    subjectentities = multi_field_list(subjentity_fields, 'ab')
-    
-    subject_fields = marc_record.subjects()  # gets all 65X fields
-
-    eras = []
-    genres = []
-    topics = []
-    places = []
-    full_lc_subjects = []
-    for field in subject_fields:
-        genres.extend(subfield_list(field, 'v'))
-        topics.extend(subfield_list(field, 'x'))
-        eras.extend(subfield_list(field,'y'))
-        places.extend(subfield_list(field, 'z'))
-        if field.tag == '650':
-            if field['a'] != 'Video recordings for the hearing impaired.':
-                topics.append(normalize(field['a']))
-        elif field.tag == '651':
-            places.append(normalize(field['a']))
-        elif field.tag == '655':
-            if field['a'] != 'Video recordings for the hearing impaired.':
-                genres.append(normalize(field['a']))
-        lc_header = ''
-        for subfield_indicator in ('a', 'v', 'x', 'y', 'z'):
-            subfield_value = subfield_list(field,subfield_indicator)
-            for subfield in  subfield_value:
-                lc_header += '%s -- ' % subfield
-        if lc_header[-3:] == '-- ':
-            lc_header = lc_header[:-3]
-        full_lc_subjects.append(lc_header)
-        #    more_topics = subfield_list(subfield_indicator)
-        #    topics.extend(more_topics)
-    # Process through Subject name fields and add to topics
-    topics.extend(get_subject_names(marc_record))
-    record['genre'] = set(genres)
-    record['topic'] = set(topics)
-    record['place'] = set(places)
-    record['era'] = set(eras)
-    record['full_lc_subject'] = set(full_lc_subjects)
-    personal_name_fields = marc_record.get_fields('700')
+##    subjentity_fields = marc_record.getVariableFields('610')
+##    subjectentities = multi_field_list(subjentity_fields, 'ab')
+    record = get_subjects(marc_record,record)
+##    print("after subjects")
+    personal_name_fields = marc_record.getVariableFields('700')
     record['personal_name'] = []
     for field in personal_name_fields:
-        subfields = field.get_subfields('a', 'b', 'c', 'd')
-        personal_name = ' '.join([x.strip() for x in subfields])
-        record['personal_name'].append(personal_name)
+        for code in ['a', 'b', 'c', 'd']:
+            subfields = field.getSubfields(code)
+            personal_name = ' '.join([x.getData().strip() for x in subfields])
+            record['personal_name'].append(personal_name)
 
-    corporate_name_fields = marc_record.get_fields('710')
+    corporate_name_fields = marc_record.getVariableFields('710')
     record['corporate_name'] = []
     for field in corporate_name_fields:
-        subfields = field.get_subfields('a', 'b')
-        corporate_name = ' '.join([x.strip() for x in subfields])
-        record['corporate_name'].append(corporate_name)
-
-    url_fields = marc_record.get_fields('856')
+        for code in ['a', 'b']:
+            subfields = field.getSubfields(code)
+            corporate_name = ' '.join([x.getData().strip() for x in subfields])
+            record['corporate_name'].append(corporate_name)
+##    print("After corporate name")
+    url_fields = marc_record.getVariableFields('856')
     if not record.has_key("url"):
         record['url'] = []
     for field in url_fields:
-        url_subfield = field.get_subfields('u')
+        url_subfield = field.getSubfields('u')
         for url in  url_subfield:
-            record['url'].append(url)
+            record['url'].append(url.getData())
     record['marc_record'] = marc_record.__str__()  # Should output to MARCMaker format
     return record
 
@@ -784,118 +884,188 @@ def get_row(record):
     row = RowDict(record)
     return row
 
-def write_csv(marc_file_handle, csv_file_handle, collections=None, 
-        ils='III'):
+def solr_submission(solr_url,marc_filename,ils='III'):
     """
-    Convert a MARC dump file to a CSV file.
-    """
-    # This doctest commented out until field names are stable.
-    #>>> write_csv('test/marc.dat', 'test/records.csv')
-    #>>> csv_records = open('test/records.csv').read()
-    #>>> csv_measure = open('test/measure.csv').read()
-    #>>> csv_records == csv_measure
-    #True
-    #>>> os.remove('test/records.csv')
+    Uses Solrj to create a document batch to send to a Solr server
 
-    # TODO: move xml parsing to marcxml parser
-    #if in_xml:
-    #    reader = pymarc.marcxml.parse_xml_to_array(marc_file_handle)
-    #else:
-    reader = pymarc.MARCReader(marc_file_handle)
+    :param solr_url: URL to solr server
+    :param marc_filename: Full path and name of MARC 21 file
+    :param ils: ILS, default to III
+    """
+    marc_file = FileInputStream(marc_filename)
+    marc_reader = marc4j.MarcStreamReader(marc_file)
+    error_file = FileOutputStream('solr-index-errors-{0}.mrc'.format(datetime.datetime.today().strftime("%Y-%m-%d")))
+    error_writer = marc4j.MarcStreamWriter(error_file)
+    solr_server = CommonsHttpSolrServer(solr_url)
+    docs,count,error_count = [],0,0
+    start = datetime.datetime.now()
     fieldname_dict = {}
     for fieldname in FIELDNAMES:
         fieldname_dict[fieldname] = fieldname
-    #for record in reader
-    count = 0
-    logging.info("Started MARC record import into Aristotle")
-    try:
-        writer = csv.DictWriter(csv_file_handle, FIELDNAMES)
-        writer.writerow(fieldname_dict)
-        for marc_record in reader:
+    import os.path
+    csv_filename = 'tmp{0}.csv'.format(os.path.splitext(marc_filename)[0])
+    writer = csv.DictWriter(open(csv_filename,'wb'),
+                            FIELDNAMES)
+    writer.writerow(fieldname_dict)
+    while marc_reader.hasNext():
+        try:
             count += 1
-            try:
-                record = get_record(marc_record, ils=ils)
-                if record:  # skip when get_record returns None
-                    if collections:
-                        new_collections = []
-                        old_record = get_old_record(record['id'])
-                        if old_record:
-                            old_collections = old_record.get('collection')
-                            if old_collections:
-                                new_collections.extend(old_collections)
-                        new_collections.extend(collections)
-                        try:
-                            record['collection'].extend(new_collections)
-                        except (AttributeError, KeyError):
-                            record['collection'] = new_collections
-                    try:
-                        row = get_row(record)
-                        if row is not None:
-                            writer.writerow(row)
-                    except:
-                        exc_type = sys.exc_info()[0]
-                        exc_value = sys.exc_info()[1]
-                        exc_tb = sys.exc_info()[2]
-                        print("CSV Write Error {0} {1} at line {2} count is {3} ".format(exc_type,
-                                                                                         exc_value,
-                                                                                         exc_tb.tb_lineno,
-                                                                                         count))
-                        for k,v in row.iteritems():
-                            print("\t{0} {1}".format(k,v))
-
-            except:
-                exc_type = sys.exc_info()[0]
-                exc_tb = sys.exc_info()[2]
-                if marc_record.title() is not None:
-                    title = marc_record.title()
-                else:
-                    title = marc_record['245'].format_field()
-                error_msg = "\n{0} error at count={1} line num={2}, title is '{3}'".format(exc_type,
-                                                                                           count,
-                                                                                           exc_tb.tb_lineno,
-                                                                                           title.encode('utf8','ignore'))
-                logging.info(error_msg)
-                try:
-                    sys.stderr.write(error_msg) 
-                except:
-                    new_exc_type,new_tb = sys.exc_info()[0],sys.exc_info()[2]
-                    sys.stderr.write("\nERROR writing stderror {0}".format(new_exc_type))
-               #raise
+            marc_record = marc_reader.next()
+            record = get_record(marc_record, ils=ils)
+            if record is not None:
+                row = get_row(record)
+                if row is not None:
+                    csv_writer.writerow(row)
+            if count%1000:
+                sys.stderr.write(".")
             else:
-                if count % 1000:
-                    sys.stderr.write(".")
-                else:
-                    logging.info("\t%s records processed" % count)
-                    sys.stderr.write(str(count))
-    finally:
-        marc_file_handle.close()
+                sys.stderr.write(str(count))
+        except Exception, e:
+            import traceback, os.path
+            tb = traceback.extract_stack()
+            traceback.print_exc(tb)
+            exc_type,exc_obj,exc_tb = sys.exc_info()
+            error = "Failed to process MARC error={0} {1} count={2}\n".format(exc_obj,
+                                                                              exc_tb,
+                                                                              count)
+            error_count += 1
+            sys.stderr.write(error)
+            if marc_record is not None:
+                error_writer.write(marc_record)
+    try:
         csv_file_handle.close()
-    logging.info("Processed %s records.\n" % count)
-    sys.stderr.write("\nProcessed %s records.\n" % count)
-    return count
+        finished_indexing = datetime.datetime.now()
+        index_finished_msg = "\nTotal MARC records of {0}\n".format(count)
+        index_finished_msg += "\tIndexed Started:{0} Finished:{1} Total Time:{2} mins\n".format(start.isoformat(),
+                                                                                                finished_indexing.isoformat(),
+                                                                                                (finished_indexing-start).seconds / 60.0)
+        index_finished_msg += "\tErrors:{0}\n".format(error_count)
+        sys.stderror.write(index_finished_msg)
+##        start_solr_ingest = datetime.datetime.now()
+##        sys.stderror.write("Starting ingesting into Solr {0}\n".format(start_solr_ingest.isoformat()))
 
-def get_old_record(id):
-    id_query = 'id:%s' % id
-    params = [
-        ('fq', id_query.encode('utf8')),
-        ('q.alt', '*:*'),
-        ('qt', 'dismax'),
-        ('wt', 'json'),
-    ]
-    urlparams = urllib.urlencode(params)
-    url = '%sselect?%s' % (settings.SOLR_URL, urlparams)
-    try:
-        solr_response = urllib.urlopen(url)
-    except IOError:
-        raise IOError('Unable to connect to the Solr instance.')
-    try:
-        response = simplejson.load(solr_response)
-    except ValueError as e:
-        print(urllib.urlopen(url).read())
-        raise ValueError('Solr response was not a valid JSON object.')
-    try:
-        doc = response['response']['docs'][0]
-    except IndexError:
-        doc = None
-    return doc
+        final_time = datetime.datetime.now()
+        sys.stderror.write("Finished at {0} for total time of {1}".format(final_time.isoformat(),
+                                                                          (final_time-start).seconds / 60))
+    except SolrServerException:
+        error = "\nError Ingesting docs into Solr: {0}\n".format(sys.exc_info()[0])
+        sys.stderr.write(error)
+    finally:
+        csv_file_handle.close()
+    
+
+##def write_csv(marc_file_handle, csv_file_handle, collections=None, 
+##        ils='III'):
+##    """
+##    Convert a MARC dump file to a CSV file.
+##    """
+##    # This doctest commented out until field names are stable.
+##    #>>> write_csv('test/marc.dat', 'test/records.csv')
+##    #>>> csv_records = open('test/records.csv').read()
+##    #>>> csv_measure = open('test/measure.csv').read()
+##    #>>> csv_records == csv_measure
+##    #True
+##    #>>> os.remove('test/records.csv')
+##
+##    # TODO: move xml parsing to marcxml parser
+##    #if in_xml:
+##    #    reader = pymarc.marcxml.parse_xml_to_array(marc_file_handle)
+##    #else:
+##    reader = pymarc.MARCReader(marc_file_handle)
+##    fieldname_dict = {}
+##    for fieldname in FIELDNAMES:
+##        fieldname_dict[fieldname] = fieldname
+##    #for record in reader
+##    count = 0
+##    logging.info("Started MARC record import into Aristotle")
+##    try:
+##        writer = csv.DictWriter(csv_file_handle, FIELDNAMES)
+##        writer.writerow(fieldname_dict)
+##        for marc_record in reader:
+##            count += 1
+##            try:
+##                record = get_record(marc_record, ils=ils)
+##                if record:  # skip when get_record returns None
+##                    if collections:
+##                        new_collections = []
+##                        old_record = get_old_record(record['id'])
+##                        if old_record:
+##                            old_collections = old_record.get('collection')
+##                            if old_collections:
+##                                new_collections.extend(old_collections)
+##                        new_collections.extend(collections)
+##                        try:
+##                            record['collection'].extend(new_collections)
+##                        except (AttributeError, KeyError):
+##                            record['collection'] = new_collections
+##                    try:
+##                        row = get_row(record)
+##                        if row is not None:
+##                            writer.writerow(row)
+##                    except:
+##                        exc_type = sys.exc_info()[0]
+##                        exc_value = sys.exc_info()[1]
+##                        exc_tb = sys.exc_info()[2]
+##                        print("CSV Write Error {0} {1} at line {2} count is {3} ".format(exc_type,
+##                                                                                         exc_value,
+##                                                                                         exc_tb.tb_lineno,
+##                                                                                         count))
+##                        for k,v in row.iteritems():
+##                            print("\t{0} {1}".format(k,v))
+##
+##            except:
+##                exc_type = sys.exc_info()[0]
+##                exc_tb = sys.exc_info()[2]
+##                if marc_record.title() is not None:
+##                    title = marc_record.title()
+##                else:
+##                    title = marc_record['245'].format_field()
+##                error_msg = "\n{0} error at count={1} line num={2}, title is '{3}'".format(exc_type,
+##                                                                                           count,
+##                                                                                           exc_tb.tb_lineno,
+##                                                                                           title.encode('utf8','ignore'))
+##                logging.info(error_msg)
+##                try:
+##                    sys.stderr.write(error_msg) 
+##                except:
+##                    new_exc_type,new_tb = sys.exc_info()[0],sys.exc_info()[2]
+##                    sys.stderr.write("\nERROR writing stderror {0}".format(new_exc_type))
+##               #raise
+##            else:
+##                if count % 1000:
+##                    sys.stderr.write(".")
+##                else:
+##                    logging.info("\t%s records processed" % count)
+##                    sys.stderr.write(str(count))
+##    finally:
+##        marc_file_handle.close()
+##        csv_file_handle.close()
+##    logging.info("Processed %s records.\n" % count)
+##    sys.stderr.write("\nProcessed %s records.\n" % count)
+##    return count
+##
+##def get_old_record(id):
+##    id_query = 'id:%s' % id
+##    params = [
+##        ('fq', id_query.encode('utf8')),
+##        ('q.alt', '*:*'),
+##        ('qt', 'dismax'),
+##        ('wt', 'json'),
+##    ]
+##    urlparams = urllib.urlencode(params)
+##    url = '%sselect?%s' % (settings.SOLR_URL, urlparams)
+##    try:
+##        solr_response = urllib.urlopen(url)
+##    except IOError:
+##        raise IOError('Unable to connect to the Solr instance.')
+##    try:
+##        response = simplejson.load(solr_response)
+##    except ValueError as e:
+##        print(urllib.urlopen(url).read())
+##        raise ValueError('Solr response was not a valid JSON object.')
+##    try:
+##        doc = response['response']['docs'][0]
+##    except IndexError:
+##        doc = None
+##    return doc
 
