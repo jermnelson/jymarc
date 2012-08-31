@@ -4,10 +4,11 @@
                    ERM and checkin records.
 """
 __author__ = "Jeremy Nelson"
-import csv
+import csv,re
 import xml.etree.ElementTree as ElementTree
 CSV_FILE = 'tutt-checkin.csv'
-    
+
+holding_re = re.compile(r"(\d+.\d+)\s*(\d*-*\d*)\s*(\d*-*\d*)\s*(\d*-*\d*)")
 def load_csv(csv_file=CSV_FILE):
     """
     Method parses through CSV file and updates electronic journals dict with
@@ -36,9 +37,24 @@ def load_csv(csv_file=CSV_FILE):
             else:
                 try:
                     int(value[0]) # Assumes holdings starts with an int
+                    holding_search = holdings_re.search(value)
+                    if holding_search is not None:
+                        search_results = holding_search.groups()
+                        volume,year_range = search_results[0],search_results[1]
+                        pretty_holdings = "v.{0} {1}".format(volume,year_range)
+                        # Iterates through the remainder of issues and appends
+                        # to pretty holding's statement
+                        for row in search_results[2:]:
+                            pretty_holdings += " n.{0}".format(row)
+                    # Assumes that holdings statement is non-standard, set
+                    # raw value
+                    else:
+                        pretty_holdings = value
+                        print("FAILED to format {0} holding's statement for {1}".format(paired_holdings[counter],
+                                                                                        pretty_holdings))
                     paired_holdings[counter] = '''<a href="{0}">{1}</a> {2}'''.format(urls[counter],
                                                                                       paired_holdings[counter],
-                                                                                      value)
+                                                                                      pretty_holdings)
                     counter += 1
                 except:
                     pass

@@ -1,3 +1,4 @@
+# -*- coding: cp1252 -*-
 """
   `mod`:marc - A jython MARC record parser, loosely based on heavily
   customized MARC parser in the
@@ -8,12 +9,14 @@
 
 
 import csv,re,sys,time,datetime,os
+import urllib,urllib2,codecs
 PROJECT_DIR = os.getcwd()
 JAR_DIR = os.path.join(PROJECT_DIR,
                        "lib")
 for jar_file in os.listdir(JAR_DIR):
     sys.path.append(os.path.join(JAR_DIR,
                                  jar_file))
+import xml.etree.ElementTree as et
 import java.io.FileInputStream as FileInputStream
 import java.io.FileOutputStream as FileOutputStream
 import org.marc4j as marc4j
@@ -90,6 +93,35 @@ FIELDNAMES = [
     'url',
 ]
 
+class RowDict(dict):
+    """
+    Subclass of dict that joins sequences and encodes to utf-8 on get.
+    Encoding to utf-8 is necessary for Python's csv library because it 
+    can't handle unicode.
+    >>> row = RowDict()
+    >>> row['bob'] = ['Montalb\\xe2an, Ricardo', 'Roddenberry, Gene']
+    >>> row.get('bob')
+    'Montalb\\xc3\\xa1n, Ricardo|Roddenberry, Gene
+    """
+    def get(self, key, *args):
+        value = dict.get(self, key, *args)
+        if not value:
+            return ''
+        if hasattr(value, '__iter__'):
+            try:
+                value = u'|'.join([x.decode('utf16','ignore') for x in value if x])
+            except:
+                value = u'|'.join([unicode(x) for x in value if x])
+        return value
+        # converting to utf8 with yaz-marcdump instead -- it handles
+        # oddities better
+##        return pymarc.marc8.marc8_to_unicode(value).encode('utf8')
+        # convert to unicode if value is a string
+        #if type(value) == type(''):
+        #    value = unicode(value, 'utf8')
+        # converting to NFC form lessens character encoding issues
+##        value = unicodedata.normalize('NFC', value)
+##        return value.encode('utf8')
 
 access_search = re.compile(r'ewww')
 
@@ -592,7 +624,8 @@ def get_lcletter(record):
     field090 = record.getVariableField('090')
     if field050 is not None:
         subfield_a = field050.getSubfield('a')
-        callnum += subfield_a.getData()
+        if subfield_a is not None:
+            callnum += subfield_a.getData()
         subfield_b = field050.getSubfield('b')
         if subfield_b is not None:
             callnum = "{0}{1}".format(callnum,
@@ -659,16 +692,20 @@ def get_subjects(marc_record,record):
         topics.extend(subfield_list(field, 'x'))
         eras.extend(subfield_list(field,'y'))
         places.extend(subfield_list(field, 'z'))
-        subfield_a = field.getSubfield('a').getData()
+        subfield_a = field.getSubfield('a')
+        if subfield_a is not None:
+            subfield_a_str = subfield_a.getData()
+        else:
+            subfield_a_str = ''
         if field.tag == '650':
-            if subfield_a != 'Video recordings for the hearing impaired.':
-                topics.append(normalize(subfield_a))
+            if subfield_a_str != 'Video recordings for the hearing impaired.':
+                topics.append(normalize(subfield_a_str))
         elif field.tag == '651':
-            if subfield_a != 'Video recordings for the hearing impaired.':
-                places.append(normalize(subfield_a))
+            if subfield_a_str != 'Video recordings for the hearing impaired.':
+                places.append(normalize(subfield_a_str))
         elif field.tag == '655':
-            if subfield_a != 'Video recordings for the hearing impaired.':
-                genres.append(normalize(subfield_a))
+            if subfield_a_str != 'Video recordings for the hearing impaired.':
+                genres.append(normalize(subfield_a_str))
         lc_header = ''
         for subfield_indicator in ('a', 'v', 'x', 'y', 'z'):
             subfield_value = subfield_list(field,subfield_indicator)
@@ -730,7 +767,7 @@ def get_record(marc_record, ils=None):
     if ELECTRONIC_JRNLS.has_key(record['id']):
         record_result = ELECTRONIC_JRNLS[record['id']]
         try:
-            record.expand(record_result)
+            record.update(record_result)
         except:
             print("ERROR updating record {0}".format(sys.exc_info()[0]))
 ##    print("\tafter elect_jrnls")
@@ -800,17 +837,19 @@ def get_record(marc_record, ils=None):
         # good idea, but need to convert to unicode first
         #title_sort = unicodedata.normalize('NFKD', title_sort)
         record['title_sort'] = title_sort
-        record['title'] = field245.getSubfield('a').getData().strip(' /:;')
+        subfield245_a = field245.getSubfield('a')
+        if subfield245_a is not None:
+            record['title'] = subfield245_a.getData().strip(' /:;')
 ##    print("\tafter 245")
     field260 = marc_record.getVariableField('260')
     if field260 is not None:
         record['imprint'] = format_field(field260)
-        subfield_a = field260.getSubfield('a')
-        if subfield_a is not None:
-            record['publisher_location'] = normalize(subfield_a.getData())
-        subfield_b = field260.getSubfield('b')
-        if subfield_b is not None:
-            record['publisher'] = normalize(subfield_b.getData())
+        subfield260_a = field260.getSubfield('a')
+        if subfield260_a is not None:
+            record['publisher_location'] = normalize(subfield260_a.getData())
+        subfield260_b = field260.getSubfield('b')
+        if subfield260_b is not None:
+            record['publisher'] = normalize(subfield260_b.getData())
 ##        print("\tafter publisher")
         # grab date from 008
         #if marc_record['260']['c']:
@@ -884,6 +923,45 @@ def get_row(record):
     row = RowDict(record)
     return row
 
+def get_multi(solr_url):
+    """Inspect solr schema.xml for multivalue fields."""
+    multivalue_fieldnames = []
+    solr_schema_url = "{0}admin/file/?file=schema.xml".format(solr_url)
+    solr_schema = urllib2.urlopen(solr_schema_url).read()
+    schema = et.fromstring(solr_schema)
+    fields_element = schema.find('fields')
+    field_elements = fields_element.findall('field')
+    for field in field_elements:
+        if field.get('multiValued') == 'true':
+            multivalue_fieldnames.append(field.get('name'))
+    return multivalue_fieldnames
+
+def load_solr(csv_file,solr_url):
+    """
+    Load CSV file into Solr.  solr_params are a dictionary of parameters
+    sent to solr on the index request.
+    """
+    file_path = os.path.abspath(csv_file)
+    solr_params = {}
+    for fieldname in get_multi(solr_url):
+        tag_split = "f.%s.split" % fieldname
+        solr_params[tag_split] = 'true'
+        tag_separator = "f.%s.separator" % fieldname
+        solr_params[tag_separator] = '|'
+    solr_params['stream.file'] = file_path
+    solr_params['stream.contentType'] = 'text/plain;charset=utf-8'
+    solr_params['commit'] = 'true'
+    params = urllib.urlencode(solr_params)
+    update_url = solr_url + 'update/csv?{0}'.format(params)
+    print("\nLoading records into Solr {0}...".format(update_url))
+    try: 
+        ##response = urllib.urlopen(update_url % params)
+        response = urllib2.urlopen(update_url)
+    except IOError:
+        raise IOError, 'Unable to connect to the Solr instance.'
+    print "Solr response:"
+    print response.read()
+
 def solr_submission(solr_url,marc_filename,ils='III'):
     """
     Uses Solrj to create a document batch to send to a Solr server
@@ -896,7 +974,7 @@ def solr_submission(solr_url,marc_filename,ils='III'):
     marc_reader = marc4j.MarcStreamReader(marc_file)
     error_file = FileOutputStream('solr-index-errors-{0}.mrc'.format(datetime.datetime.today().strftime("%Y-%m-%d")))
     error_writer = marc4j.MarcStreamWriter(error_file)
-    solr_server = CommonsHttpSolrServer(solr_url)
+##    solr_server = CommonsHttpSolrServer(solr_url)
     docs,count,error_count = [],0,0
     start = datetime.datetime.now()
     fieldname_dict = {}
@@ -904,9 +982,12 @@ def solr_submission(solr_url,marc_filename,ils='III'):
         fieldname_dict[fieldname] = fieldname
     import os.path
     csv_filename = 'tmp{0}.csv'.format(os.path.splitext(marc_filename)[0])
-    writer = csv.DictWriter(open(csv_filename,'wb'),
-                            FIELDNAMES)
-    writer.writerow(fieldname_dict)
+    csv_file_handle = open(csv_filename,'wb')
+    csv_writer = csv.DictWriter(csv_file_handle,
+                                FIELDNAMES)
+
+    
+    csv_writer.writerow(fieldname_dict)
     while marc_reader.hasNext():
         try:
             count += 1
@@ -930,6 +1011,7 @@ def solr_submission(solr_url,marc_filename,ils='III'):
                                                                               count)
             error_count += 1
             sys.stderr.write(error)
+            return
             if marc_record is not None:
                 error_writer.write(marc_record)
     try:
@@ -939,13 +1021,14 @@ def solr_submission(solr_url,marc_filename,ils='III'):
         index_finished_msg += "\tIndexed Started:{0} Finished:{1} Total Time:{2} mins\n".format(start.isoformat(),
                                                                                                 finished_indexing.isoformat(),
                                                                                                 (finished_indexing-start).seconds / 60.0)
+        load_solr(csv_filename,solr_url)
         index_finished_msg += "\tErrors:{0}\n".format(error_count)
-        sys.stderror.write(index_finished_msg)
+        sys.stderr.write(index_finished_msg)
 ##        start_solr_ingest = datetime.datetime.now()
 ##        sys.stderror.write("Starting ingesting into Solr {0}\n".format(start_solr_ingest.isoformat()))
 
         final_time = datetime.datetime.now()
-        sys.stderror.write("Finished at {0} for total time of {1}".format(final_time.isoformat(),
+        sys.stderr.write("Finished at {0} for total time of {1}".format(final_time.isoformat(),
                                                                           (final_time-start).seconds / 60))
     except SolrServerException:
         error = "\nError Ingesting docs into Solr: {0}\n".format(sys.exc_info()[0])
