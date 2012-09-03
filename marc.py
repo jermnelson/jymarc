@@ -709,6 +709,7 @@ def get_subjects(marc_record,record):
         lc_header = ''
         for subfield_indicator in ('a', 'v', 'x', 'y', 'z'):
             subfield_value = subfield_list(field,subfield_indicator)
+            print("subfield_value {0}".format(subfield_value))
             for subfield in  subfield_value:
                 lc_header += '%s -- ' % subfield
         if lc_header[-3:] == '-- ':
