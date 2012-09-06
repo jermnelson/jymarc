@@ -16,6 +16,7 @@ JAR_DIR = os.path.join(PROJECT_DIR,
 for jar_file in os.listdir(JAR_DIR):
     sys.path.append(os.path.join(JAR_DIR,
                                  jar_file))
+import pysolr
 import xml.etree.ElementTree as et
 import java.io.FileInputStream as FileInputStream
 import java.io.FileOutputStream as FileOutputStream
@@ -122,6 +123,17 @@ class RowDict(dict):
         # converting to NFC form lessens character encoding issues
 ##        value = unicodedata.normalize('NFC', value)
 ##        return value.encode('utf8')
+
+class RecordSuppressedError(Exception):
+    """
+    Custom Exception raised if record is suppressed.
+    """
+
+    def __init__(self,value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
 
 access_search = re.compile(r'ewww')
 
@@ -380,11 +392,10 @@ def get_format(record):
             elif field008[24] == 'b':
                 format = 'Book'
             else:
-                logging.error("314 Trying re on field 502 for %s" % record.title())
                 thesis_re = re.compile(r"Thesis")
                 #! Quick hack to check for "Thesis" string in 502
                 desc502 = record.getVariableField("502")
-                if len(desc502) > 0:
+                if desc502 is not None:
                     desc502 = desc502.toString()
                 else:
                     desc502 = ''
@@ -397,7 +408,7 @@ def get_format(record):
     # checks 006 to determine if the format is a manuscript
     field006 = record.getVariableField("006")
     if field006 is not None and len(format) < 1:
-        field006 = field006.toData()
+        field006 = field006.getData()
         if field006[0] == 't':
             format = 'Manuscript'
         elif field006[0] == 'm' or field006[6] == 'o':
@@ -405,7 +416,7 @@ def get_format(record):
             format = 'Electronic'
     # Doesn't match any of the rules
     if len(format) < 1:
-        logging.error("309 UNKNOWN FORMAT Title=%s Leader: %s" % (record.title(),leader))
+        logging.error("309 UNKNOWN FORMAT Leader: %s" % (leader))
         format = 'Unknown'
 
     # Some formats are determined by location
@@ -445,21 +456,25 @@ def get_subject_names(record):
     subject_name_fields = record.getVariableFields('600')
     for field in subject_name_fields:
         name = field.getSubfield('a')
+        if name is not None:
+            name_str = name.getData()
+        else:
+            name_str = ''
         titles = field.getSubfields('c')
         for title in titles:
             name_str = '{0} {1}'.format(title.getData(),
-                                    name.getData())
-            output.append(name_str)
+                                        name_str)
+            output.append(name_str.strip())
         numeration = field.getSubfields('b')
         for number in numeration:
-            name_str = '%s %s' % (name.getData(),
-                              number.getData())
-            output.append(name_str)
+            name_str = '%s %s' % (name_str,
+                                  number.getData())
+            output.append(name_str.strip())
         dates = field.getSubfields('d')
         for date in dates:
-            name_str = '%s %s' % (name.getData(),
+            name_str = '%s %s' % (name_str,
                                   date.getData())
-            output.append(name_str)       
+            output.append(name_str.strip())       
     return output
 
 def parse_008(record, marc_record):
@@ -709,7 +724,6 @@ def get_subjects(marc_record,record):
         lc_header = ''
         for subfield_indicator in ('a', 'v', 'x', 'y', 'z'):
             subfield_value = subfield_list(field,subfield_indicator)
-            print("subfield_value {0}".format(subfield_value))
             for subfield in  subfield_value:
                 lc_header += '%s -- ' % subfield
         if lc_header[-3:] == '-- ':
@@ -777,8 +791,8 @@ def get_record(marc_record, ils=None):
         suppressed_codes = field999.getSubfields('f')
         for code in suppressed_codes:
             if code.getData() == 'n':
-                logging.error("NOT INDEXING %s RECORD SUPPRESSED" % record['id'])
-                return
+                error_msg = "NOT INDEXING {0} RECORD".format(record['id'])
+                raise RecordSuppressedError(error_msg)
     # should ctrl_num default to 001 or 035?
     field001 = marc_record.getVariableField('001')
     if field001 is not None:
@@ -817,6 +831,7 @@ def get_record(marc_record, ils=None):
     record['callnum'] = get_callnumber(marc_record)
 ##    print("\tafter callnum")
     record['callnumlayerone'] = record['callnum']
+    record['format'] = get_format(marc_record)
     if record.has_key('holdings'):
         record['holdings'].extend(get_holdings(marc_record))
     else: 
@@ -964,6 +979,63 @@ def load_solr(csv_file,solr_url):
     print response.read()
 
 def solr_submission(solr_url,marc_filename,ils='III'):
+    """
+    Uses Solrj to create a document batch to send to a Solr server
+
+    :param solr_url: URL to solr server
+    :param marc_filename: Full path and name of MARC 21 file
+    :param ils: ILS, default to III
+    """
+    marc_file = FileInputStream(marc_filename)
+    marc_reader = marc4j.MarcStreamReader(marc_file)
+    error_file = FileOutputStream('solr-index-errors-{0}.mrc'.format(datetime.datetime.today().strftime("%Y-%m-%d")))
+    error_writer = marc4j.MarcStreamWriter(error_file)
+    solr_server = pysolr.Solr(solr_url)
+    docs,count,error_count,suppressed = [],0,0,0
+    start = datetime.datetime.today()
+    while marc_reader.hasNext():
+        try:
+            count += 1
+            marc_record = marc_reader.next()
+            record = get_record(marc_record, ils=ils)
+            if record is not None:
+                docs.append(record)
+            if count%1000:
+                sys.stderr.write(".")
+            else:
+                sys.stderr.write(str(count))
+            if not count%10000:
+                solr_server.add(docs)
+                docs = []
+                sys.stderr.write(" solr-update:{0} ".format(count))
+        except RecordSuppressedError, e:
+            suppressed += 1
+            continue
+        except Exception, e:
+            import traceback, os.path
+            tb = traceback.extract_stack()
+            traceback.print_exc(tb)
+            exc_type,exc_obj,exc_tb = sys.exc_info()
+            error = "Failed to process MARC error={0} {1} count={2}\n".format(exc_obj,
+                                                                              exc_tb,
+                                                                              count)
+            error_count += 1
+            sys.stderr.write(error)
+            return
+            if marc_record is not None:
+                error_writer.write(marc_record)
+    if len(docs) > 0:
+        solr_server.add(docs)
+    finished_indexing = datetime.datetime.today()
+    index_finished_msg = "\nTotal MARC records of {0}\n".format(count)
+    index_finished_msg += "\tIndexed Started:{0}\n\tFinished:{1}\n\t Total Time:{2} mins\n".format(start.isoformat(),
+                                                                                                   finished_indexing.isoformat(),
+                                                                                                   (finished_indexing-start).seconds / 60.0)
+    index_finished_msg += "\tErrors:{0} Suppressed:{1}\n".format(error_count,suppressed)
+    sys.stderr.write(index_finished_msg)
+  
+
+def csv_solr_submission(solr_url,marc_filename,ils='III'):
     """
     Uses Solrj to create a document batch to send to a Solr server
 

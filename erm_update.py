@@ -9,6 +9,10 @@ import xml.etree.ElementTree as ElementTree
 CSV_FILE = 'tutt-checkin.csv'
 
 holding_re = re.compile(r"(\d+.\d+)\s*(\d*-*\d*)\s*(\d*-*\d*)\s*(\d*-*\d*)")
+volume_re = re.compile(r"(\d+[.]\d+)")
+issue_re = re.compile(r"(\d{1,2}-\d{0,2})")
+year_re = re.compile(r"(\d{3,4}-\d{0,4})")
+
 def load_csv(csv_file=CSV_FILE):
     """
     Method parses through CSV file and updates electronic journals dict with
@@ -37,21 +41,19 @@ def load_csv(csv_file=CSV_FILE):
             else:
                 try:
                     int(value[0]) # Assumes holdings starts with an int
-                    holding_search = holdings_re.search(value)
-                    if holding_search is not None:
-                        search_results = holding_search.groups()
-                        volume,year_range = search_results[0],search_results[1]
-                        pretty_holdings = "v.{0} {1}".format(volume,year_range)
-                        # Iterates through the remainder of issues and appends
-                        # to pretty holding's statement
-                        for row in search_results[2:]:
-                            pretty_holdings += " n.{0}".format(row)
+                    pretty_holdings = ''
+                    for token in value.split(" "):
+                        if volume_re.search(token):
+                            pretty_holdings += "v.{0} ".format(volume_re.search(token).groups()[0])
+                        elif year_re.search(token):
+                            pretty_holdings += "{0} ".format(year_re.search(token).groups()[0])
+                        elif issue_re.search(token):
+                            pretty_holdings += "n.{0} ".format(issue_re.search(token).groups()[0])
+                        else:
+                            pretty_holdings += "{0} ".format(token)
+
                     # Assumes that holdings statement is non-standard, set
                     # raw value
-                    else:
-                        pretty_holdings = value
-                        print("FAILED to format {0} holding's statement for {1}".format(paired_holdings[counter],
-                                                                                        pretty_holdings))
                     paired_holdings[counter] = '''<a href="{0}">{1}</a> {2}'''.format(urls[counter],
                                                                                       paired_holdings[counter],
                                                                                       pretty_holdings)
