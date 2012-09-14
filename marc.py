@@ -1004,7 +1004,7 @@ def solr_submission(solr_url,marc_filename,ils='III'):
                 sys.stderr.write(".")
             else:
                 sys.stderr.write(str(count))
-            if not count%10000:
+            if not count%2000:
                 solr_server.add(docs)
                 docs = []
                 sys.stderr.write(" solr-update:{0} ".format(count))
