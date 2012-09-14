@@ -4,14 +4,16 @@
                    ERM and checkin records.
 """
 __author__ = "Jeremy Nelson"
-import csv,re
+import csv,re,datetime
 import xml.etree.ElementTree as ElementTree
 CSV_FILE = 'tutt-checkin.csv'
 
 holding_re = re.compile(r"(\d+.\d+)\s*(\d*-*\d*)\s*(\d*-*\d*)\s*(\d*-*\d*)")
-volume_re = re.compile(r"(\d+[.]\d+)")
+month_day_re = re.compile(r"(\d+[.]\d+)")
 issue_re = re.compile(r"(\d{1,2}-\d{0,2})")
-year_re = re.compile(r"(\d{3,4}-\d{0,4})")
+
+
+
 
 def load_csv(csv_file=CSV_FILE):
     """
@@ -40,18 +42,8 @@ def load_csv(csv_file=CSV_FILE):
                 paired_holdings.append("{0} ".format(' '.join(raw_url[1:])))
             else:
                 try:
-                    int(value[0]) # Assumes holdings starts with an int
-                    pretty_holdings = ''
-                    for token in value.split(" "):
-                        if volume_re.search(token):
-                            pretty_holdings += "v.{0} ".format(volume_re.search(token).groups()[0])
-                        elif year_re.search(token):
-                            pretty_holdings += "{0} ".format(year_re.search(token).groups()[0])
-                        elif issue_re.search(token):
-                            pretty_holdings += "n.{0} ".format(issue_re.search(token).groups()[0])
-                        else:
-                            pretty_holdings += "{0} ".format(token)
-
+                    int(value[0]) # Assumes holdings starts with an 1.1 indicator
+                    pretty_holdings = format_holding_stmt(value)
                     # Assumes that holdings statement is non-standard, set
                     # raw value
                     paired_holdings[counter] = '''<a href="{0}">{1}</a> {2}'''.format(urls[counter],
@@ -65,5 +57,54 @@ def load_csv(csv_file=CSV_FILE):
         electronic_bibs[bib_id] = row_dict
     return electronic_bibs   
                 
-                
+vol_num_re = re.compile(r"^1.1 (\d{1,2}-\d{0,2})\s*(\d{1,2}-\d{0,2})")
+month_day_re = re.compile(r"(\d{1,2})-(\d{0,2})\s*(\d{1,2})-(\d{0,2})$")
+year_re = re.compile(r"(\d{3,4})-(\d{0,4})")            
+def format_holding_stmt(raw_value):
+    """
+    Method takes the raw_value from the holdings csv field and creates a
+    pretty display for the Discovery Layer
+
+    :param raw_value: Raw value from the csv field
+    :rtype: string of formated "pretty" display of the holdings
+    """
+    def get_date(month,day,date_format):
+        if len(month) > 0 and len(day) > 0:
+            holding_date = datetime.datetime.strptime("{0}-{1}".format(month,day),
+                                                      "%m-%d")
+            return holding_date.strftime("(%b. %d- ") # Returns the start of the date display
+                                                      # in the format of "(Mon. day" ex:
+                                                      # (Jan. 01-
+        return ''
+    pretty_holdings = ''
+    # Performs regex on raw_value to see volume and issue number is present
+    if vol_num_re.search(raw_value) is not None:
+        volume,number = vol_num_re.search(raw_value).groups()
+        if len(volume) > 1:
+            pretty_holdings += "v.{0}".format(volume)
+        if len(number) > 1:
+            if len(volume) > 1:
+                pretty_holdings += ":"
+            pretty_holdings += "no.{0} ".format(number)
+    # Extracts and builds the start and end date strings for the holdings statement
+    start_str,end_str = '',''
+    if month_day_re.search(raw_value) is not None:
+        month_start,month_end,day_start,day_end = month_day_re.search(raw_value).groups()
+        start_date += get_date(month_start,day_start)
+        end_date += get_date(month_end,day_end)
+    # Extracts the year(s) and adds start_str and end_str if there are values
+    if year_re.search(value) is not None:
+        start_year,end_year = year_re.search(value).groups()
+        if len(start_year) > 0 and len(start_str) > 0:
+            start_str += "{0}) ".format(start_year)
+            pretty_holdings += start_str
+        if len(end_year) > 0 and len(end_str) > 0:
+            end_str += "{0}) ".format(end_year)
+            pretty_holdings += end_str
+    return pretty_holdings
+            
         
+        
+    
+        
+    
