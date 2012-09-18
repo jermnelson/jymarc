@@ -68,11 +68,11 @@ def format_holding_stmt(raw_value):
     :param raw_value: Raw value from the csv field
     :rtype: string of formated "pretty" display of the holdings
     """
-    def get_date(month,day,date_format):
+    def get_date(month,day):
         if len(month) > 0 and len(day) > 0:
             holding_date = datetime.datetime.strptime("{0}-{1}".format(month,day),
                                                       "%m-%d")
-            return holding_date.strftime("(%b. %d- ") # Returns the start of the date display
+            return holding_date.strftime("(%b. %d") # Returns the start of the date display
                                                       # in the format of "(Mon. day" ex:
                                                       # (Jan. 01-
         return ''
@@ -81,8 +81,10 @@ def format_holding_stmt(raw_value):
     if vol_num_re.search(raw_value) is not None:
         volume,number = vol_num_re.search(raw_value).groups()
         if len(volume) > 1:
+            volume = volume.replace("-","")
             pretty_holdings += "v.{0}".format(volume)
         if len(number) > 1:
+            number = number.replace("-","")
             if len(volume) > 1:
                 pretty_holdings += ":"
             pretty_holdings += "no.{0} ".format(number)
@@ -90,18 +92,18 @@ def format_holding_stmt(raw_value):
     start_str,end_str = '',''
     if month_day_re.search(raw_value) is not None:
         month_start,month_end,day_start,day_end = month_day_re.search(raw_value).groups()
-        start_date += get_date(month_start,day_start)
-        end_date += get_date(month_end,day_end)
+        start_str += get_date(month_start,day_start)
+        end_str += get_date(month_end,day_end)
     # Extracts the year(s) and adds start_str and end_str if there are values
-    if year_re.search(value) is not None:
-        start_year,end_year = year_re.search(value).groups()
+    if year_re.search(raw_value) is not None:
+        start_year,end_year = year_re.search(raw_value).groups()
         if len(start_year) > 0 and len(start_str) > 0:
-            start_str += "{0}) ".format(start_year)
+            start_str += ", {0})-".format(start_year)
             pretty_holdings += start_str
         if len(end_year) > 0 and len(end_str) > 0:
-            end_str += "{0}) ".format(end_year)
+            end_str += ", {0}) ".format(end_year)
             pretty_holdings += end_str
-    return pretty_holdings
+    return pretty_holdings.strip()
             
         
         
