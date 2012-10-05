@@ -18,6 +18,7 @@ for jar_file in os.listdir(JAR_DIR):
                                  jar_file))
 import pysolr
 import xml.etree.ElementTree as et
+import java.lang.System as System
 import java.io.FileInputStream as FileInputStream
 import java.io.FileOutputStream as FileOutputStream
 import org.marc4j as marc4j
@@ -1004,9 +1005,10 @@ def solr_submission(solr_url,marc_filename,ils='III'):
                 sys.stderr.write(".")
             else:
                 sys.stderr.write(str(count))
-            if not count%2000:
+            if not count%750:
                 solr_server.add(docs)
                 docs = []
+                System.gc()
                 sys.stderr.write(" solr-update:{0} ".format(count))
         except RecordSuppressedError, e:
             suppressed += 1

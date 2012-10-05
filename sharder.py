@@ -18,13 +18,24 @@ arg_parser.add_argument('filename',
                         help="[filename] Name of MARC file to be shared")
 arg_parser.add_argument('--shard_size',
                         nargs="+",
-                        default=50000,
+                        default=100000,
                         help="[shard_size] Size of shard, default is 50000")
+
+
+def check_suppressed(marc_record):
+    all999s = marc_record.getVariableFields('999')
+    for field in all999s:
+        codes = field.getSubfields('f')
+        for code in codes:
+            if code.getData() == 'n':
+                return True
+    return False        
+
 
 def shard(shard_size,input_marc_filename):
     marc_file = FileInputStream(input_marc_filename)
     marc_reader = marc4j.MarcStreamReader(marc_file)
-    count,error_count = 0,0
+    count,error_count,suppressed = 0,0,0
     marc_output_filename = os.path.join('shards',
                                         'shard-{0}k-{1}.mrc'.format(count,
                                                                     count+shard_size))
@@ -34,6 +45,8 @@ def shard(shard_size,input_marc_filename):
         try:
             count += 1         
             record = marc_reader.next()
+            if check_suppressed(record) == True:
+                suppressed += 1 
             marc_writer.write(record)
             if not count%shard_size: # Close current output file and open new
                 marc_writer.close()
@@ -56,11 +69,14 @@ def shard(shard_size,input_marc_filename):
             error_log.write("{0}\n".format(error_msg))
     error_log.close()
     marc_writer.close()
-    print("Finished sharding at {0}, total record={1}, errors={2}".format(datetime.datetime.today().isoformat(),
-                                                                          count,
-                                                                          error_count))
+    print('''Finished sharding at {0}, 
+    total record={1} 
+    suppressed={2} 
+    errors={3}'''.format(datetime.datetime.today().isoformat(),
+                         count,
+                         suppressed,
+                         error_count))
     
-        
                           
     
 if __name__ == '__main__':
@@ -68,7 +84,7 @@ if __name__ == '__main__':
     if 'shard_size' is args:
         SHARD_SIZE = args.shard_size
     else:
-        SHARD_SIZE = 50000 # Default
+        SHARD_SIZE = 100000 # Default
         print("Using default shard_size of %s" % SHARD_SIZE)
     shard(SHARD_SIZE,args.filename[0])
     
