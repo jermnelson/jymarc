@@ -74,7 +74,7 @@ FIELDNAMES = [
     'issn',
     'item_ids',
     'language',
-    'language_dubbed', 
+    'language_dubbed',
     'language_subtitles',
     'lc_firstletter',
     'location',
@@ -95,10 +95,11 @@ FIELDNAMES = [
     'url',
 ]
 
+
 class RowDict(dict):
     """
     Subclass of dict that joins sequences and encodes to utf-8 on get.
-    Encoding to utf-8 is necessary for Python's csv library because it 
+    Encoding to utf-8 is necessary for Python's csv library because it
     can't handle unicode.
     >>> row = RowDict()
     >>> row['bob'] = ['Montalb\\xe2an, Ricardo', 'Roddenberry, Gene']
@@ -153,7 +154,7 @@ def subfield_list(field, subfield_indicator):
     """
     Method takes MARC field and subfield values and returns
     a list of the subfield values
-    
+
     :param field: MARC field
     :param subfield_indicator: List or char of subfields
     :rtype: List
@@ -184,7 +185,7 @@ def format_field(field):
                 fielddata += ' {0}'.format(subfield.getData())
             else:
                 fielddata += ' -- {0}'.format(subfield.getData())
-    return fielddata.strip()        
+    return fielddata.strip()
 
 def get_access(record):
     '''Generates simple access field specific to CC's location codes
@@ -214,8 +215,8 @@ def get_author(record):
     if field111 is not None:
         return format_field(field111)
     return None
-    
-    
+
+
 
 def get_format(record):
     '''Generates format, extends existing Kochief function.
@@ -305,17 +306,17 @@ def get_format(record):
                     if field007[4] == 'v' or field007[4] == 'g':
                         format = 'DVD Video'
                     elif field007[4] == 's':
-                        format = 'Blu-ray Video' 
+                        format = 'Blu-ray Video'
                     elif field007[4] == 'b':
-                        format = 'VHS Video' 
+                        format = 'VHS Video'
                     else:
                         logging.error("247 UNKNOWN field007 %s for %s" % (field007[4],record.title()))
                 elif field007[1] == 'f':        # videocassette
                     format = 'VHS Video'
                 elif field007[1] == 'r':
                     format = 'Video Reel'
-    # now do guesses that are NOT based upon physical description 
-    # (physical description is going to be the most reliable indicator, 
+    # now do guesses that are NOT based upon physical description
+    # (physical description is going to be the most reliable indicator,
     # when it exists...)
     field008 = record.getVariableField("008")
     if field008 is not None:
@@ -339,7 +340,7 @@ def get_format(record):
                 format = 'Book'
         elif leader[7] == 's':            # serial
             if len(field008) > 18:
-                frequencies = ['b', 'c', 'd', 'e', 'f', 'i', 'j', 
+                frequencies = ['b', 'c', 'd', 'e', 'f', 'i', 'j',
                                'q', 's', 't', 'w']
                 if field008[21] in frequencies:
                     format = 'Journal'
@@ -350,7 +351,7 @@ def get_format(record):
             else:
                 format = 'Journal'
     elif leader[6] == 'b' and len(format) < 1:
-        format = 'Manuscript' 
+        format = 'Manuscript'
     elif leader[6] == 'e' and len(format) < 1:
         format = 'Map'
     elif leader[6] == 'c' and len(format) < 1:
@@ -421,13 +422,13 @@ def get_format(record):
         format = 'Unknown'
 
     # Some formats are determined by location
-    
+
     format = lookup_location(record,format)
     return format
 
 def lookup_location(record,format=None):
     """
-    Does a look-up on location to determine format for edge cases like annuals in the 
+    Does a look-up on location to determine format for edge cases like annuals in the
     reference area.
 
     :param record: MARC Record
@@ -443,13 +444,13 @@ def lookup_location(record,format=None):
                   return "Book" # Classify everything as a book and not journal
          in_periodicals = PER_LOC_RE.search(subfield_a.getData())
          if in_periodicals is not None:
-             return "Journal" 
-    return format     
+             return "Journal"
+    return format
 
 def get_subject_names(record):
     """
     Iterates through record's 600 fields, returns a list of names
- 
+
     :param record: MARC record, required
     :rtype: List of subject terms
     """
@@ -475,12 +476,12 @@ def get_subject_names(record):
         for date in dates:
             name_str = '%s %s' % (name_str,
                                   date.getData())
-            output.append(name_str.strip())       
+            output.append(name_str.strip())
     return output
 
 def parse_008(record, marc_record):
     """
-    Function parses 008 MARC field 
+    Function parses 008 MARC field
 
     :param record: Dictionary of MARC record values
     :param marc_record: MARC record
@@ -517,7 +518,7 @@ def parse_008(record, marc_record):
             record['pubyear'] = date
             # maybe try it as a solr.DateField at some point
             #record['pubyear'] = '%s-01-01T00:00:01Z' % date
-    
+
         audience_code = field008[22]
         if audience_code != ' ':
             try:
@@ -557,9 +558,9 @@ def id_match(id_fields, id_re):
 
 def get_languages(language_codes):
     """
-    Function extracts language codes and then does a lookup in the 
+    Function extracts language codes and then does a lookup in the
     MARC maps value.
-   
+
     :param language_codes: List of codes
     :rtype: List
     """
@@ -627,8 +628,8 @@ def get_items(record,ils=None):
         for y in f945.getSubfields('y'):
             if ils=='III': # Removes starting period and trailing character
                 item_id = y.getData()
-                items.append(item_id[1:-1]) 
-    return items  
+                items.append(item_id[1:-1])
+    return items
 
 lc_stub_search = re.compile(r"([A-Z]+)")
 
@@ -661,7 +662,7 @@ def get_lcletter(record):
 
 def get_location(record):
     """Uses CC's location codes in Millennium to map physical
-    location of the item to human friendly description from 
+    location of the item to human friendly description from
     the tutt_maps LOCATION_CODE_MAP dict"""
     output = []
     locations = record.getVariableFields('994')
@@ -740,7 +741,7 @@ def get_subjects(marc_record,record):
     record['era'] = set(eras)
     record['full_lc_subject'] = set(full_lc_subjects)
     return record
-    
+
 def get_record(marc_record, ils=None):
     """
     Pulls the fields from a MARCReader record into a dictionary.
@@ -770,7 +771,7 @@ def get_record(marc_record, ils=None):
                           record['id'] = sub_a
             else:
                 record['id'] = bib_id[1:-1]
-    
+
     except AttributeError:
         # try other fields for id?
         #sys.stderr.write("\nNo value in ID field, leaving ID blank\n")
@@ -835,7 +836,7 @@ def get_record(marc_record, ils=None):
     record['format'] = get_format(marc_record)
     if record.has_key('holdings'):
         record['holdings'].extend(get_holdings(marc_record))
-    else: 
+    else:
         record['holdings'] = get_holdings(marc_record)
     record['item_ids'] = get_items(marc_record,ils)
     record['lc_firstletter'] = get_lcletter(marc_record)
@@ -895,7 +896,7 @@ def get_record(marc_record, ils=None):
         note_fields  = marc_record.getVariableFields(tag)
         for field in note_fields:
             record['notes'].append(format_field(field))
-##    print("\tafter notes") 
+##    print("\tafter notes")
     contents_fields = marc_record.getVariableFields('505')
     record['contents'] = []
     for field in contents_fields:
@@ -904,7 +905,7 @@ def get_record(marc_record, ils=None):
             record['contents'].append(subfield_a.getData())
     summary_fields = marc_record.getVariableFields('520')
     record['summary'] = [format_field(field) for field in summary_fields]
-       
+
 ##    subjentity_fields = marc_record.getVariableFields('610')
 ##    subjectentities = multi_field_list(subjentity_fields, 'ab')
     record = get_subjects(marc_record,record)
@@ -971,7 +972,7 @@ def load_solr(csv_file,solr_url):
     params = urllib.urlencode(solr_params)
     update_url = solr_url + 'update/csv?{0}'.format(params)
     print("\nLoading records into Solr {0}...".format(update_url))
-    try: 
+    try:
         ##response = urllib.urlopen(update_url % params)
         response = urllib2.urlopen(update_url)
     except IOError:
@@ -979,9 +980,80 @@ def load_solr(csv_file,solr_url):
     print "Solr response:"
     print response.read()
 
-def solr_submission(solr_url,marc_filename,ils='III'):
+
+
+def solr_submission(solr_url, marc_filename, ils='III'):
     """
-    Uses Solrj to create a document batch to send to a Solr server
+    Uses Solr java library to create a document batch to send to a Solr server
+
+    :param solr_url: URL to solr server
+    :param marc_filename: Full path and name of MARC 21 file
+    :param ils: ILS, default to III
+    """
+    marc_file = FileInputStream(marc_filename)
+    marc_reader = marc4j.MarcStreamReader(marc_file)
+    error_file = FileOutputStream('solr-index-errors-{0}.mrc'.format(
+        datetime.datetime.today().strftime("%Y-%m-%d")))
+    error_writer = marc4j.MarcStreamWriter(error_file)
+    docs,count,error_count,suppressed = [],0,0,0
+    start = datetime.datetime.today()
+    solr_server = CommonsHttpSolrServer(solr_url)
+    while marc_reader.hasNext():
+        try:
+            count += 1
+            marc_record = marc_reader.next()
+            record = get_record(marc_record, ils=ils)
+            if record is not None:
+                solr_doc = SolrInputDocument()
+                for key,value in record.iteritems():
+                    solr_doc.addField(key,value)
+                docs.append(solr_doc)
+            if count % 1000:
+                sys.stderr.write(".")
+            else:
+                sys.stderr.write(str(count))
+                solr_server.add(docs)
+                solr_response = solr_server.commit()
+                docs = []
+                System.gc()
+                sys.stderr.write(" solr-update:{0} time-lapsed: {1} ".format(count,
+                (datetime.datetime.now()-start).seconds / 60.0))
+        except RecordSuppressedError, e:
+            suppressed += 1
+            continue
+        except Exception, e:
+            import traceback, os.path
+            tb = traceback.extract_stack()
+            traceback.print_exc(tb)
+            exc_type,exc_obj,exc_tb = sys.exc_info()
+            error = "Failed to process MARC error={0} {1} count={2}\n".format(exc_obj,
+                                                                              exc_tb,
+                                                                              count)
+            error_count += 1
+            sys.stderr.write(error)
+            return
+            if marc_record is not None:
+                error_writer.write(marc_record)
+    if len(docs) > 0:
+        solr_server.add(docs)
+        solr_server.commit()
+    finished_indexing = datetime.datetime.today()
+    total_minutes = (finished_indexing-start).seconds / 60.0
+    index_finished_msg = "\nTotal MARC records of {0}\n".format(count)
+    index_finished_msg += '''\tIndexed Started:{0}
+    Finished:{1}
+    Total Time:{2} mins for {3} records per min
+    '''.format(start.isoformat(),
+        finished_indexing.isoformat(),
+        total_minutes,
+        count / total_minutes)
+    index_finished_msg += "\tErrors:{0} Suppressed:{1}\n".format(error_count,suppressed)
+    sys.stderr.write(index_finished_msg)
+
+
+def py_solr_submission(solr_url, marc_filename, ils='III'):
+    """
+    Uses solr python library to create a document batch to send to a Solr server
 
     :param solr_url: URL to solr server
     :param marc_filename: Full path and name of MARC 21 file
@@ -1005,7 +1077,7 @@ def solr_submission(solr_url,marc_filename,ils='III'):
                 sys.stderr.write(".")
             else:
                 sys.stderr.write(str(count))
-            if not count%750:
+            if not count%1500:
                 solr_server.add(docs)
                 docs = []
                 System.gc()
@@ -1035,7 +1107,7 @@ def solr_submission(solr_url,marc_filename,ils='III'):
                                                                                                    (finished_indexing-start).seconds / 60.0)
     index_finished_msg += "\tErrors:{0} Suppressed:{1}\n".format(error_count,suppressed)
     sys.stderr.write(index_finished_msg)
-  
+
 
 def csv_solr_submission(solr_url,marc_filename,ils='III'):
     """
@@ -1061,7 +1133,7 @@ def csv_solr_submission(solr_url,marc_filename,ils='III'):
     csv_writer = csv.DictWriter(csv_file_handle,
                                 FIELDNAMES)
 
-    
+
     csv_writer.writerow(fieldname_dict)
     while marc_reader.hasNext():
         try:
@@ -1110,9 +1182,9 @@ def csv_solr_submission(solr_url,marc_filename,ils='III'):
         sys.stderr.write(error)
     finally:
         csv_file_handle.close()
-    
 
-##def write_csv(marc_file_handle, csv_file_handle, collections=None, 
+
+##def write_csv(marc_file_handle, csv_file_handle, collections=None,
 ##        ils='III'):
 ##    """
 ##    Convert a MARC dump file to a CSV file.
@@ -1184,7 +1256,7 @@ def csv_solr_submission(solr_url,marc_filename,ils='III'):
 ##                                                                                           title.encode('utf8','ignore'))
 ##                logging.info(error_msg)
 ##                try:
-##                    sys.stderr.write(error_msg) 
+##                    sys.stderr.write(error_msg)
 ##                except:
 ##                    new_exc_type,new_tb = sys.exc_info()[0],sys.exc_info()[2]
 ##                    sys.stderr.write("\nERROR writing stderror {0}".format(new_exc_type))

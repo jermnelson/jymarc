@@ -33,12 +33,14 @@ def check_suppressed(marc_record):
 
 
 def shard(shard_size,input_marc_filename):
+    shard_name = os.path.splitext(input_marc_filename)[0]
     marc_file = FileInputStream(input_marc_filename)
     marc_reader = marc4j.MarcStreamReader(marc_file)
     count,error_count,suppressed = 0,0,0
     marc_output_filename = os.path.join('shards',
-                                        'shard-{0}k-{1}.mrc'.format(count,
-                                                                    count+shard_size))
+                                        '{0}-shard-{1}k-{2}.mrc'.format(shard_name,
+                                                                        count,
+                                                                        count+shard_size))
     marc_writer = marc4j.MarcStreamWriter(FileOutputStream(marc_output_filename))
     error_log = open('errors.log','w')
     while marc_reader.hasNext():
