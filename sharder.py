@@ -12,6 +12,7 @@ import java.io.FileOutputStream as FileOutputStream
 import org.marc4j as marc4j
 import codecs
 
+
 arg_parser = argparse.ArgumentParser(description='Index MARC records into Solr')
 arg_parser.add_argument('filename',
                         nargs="+",
@@ -42,6 +43,7 @@ def shard(shard_size,input_marc_filename):
                                                                         count,
                                                                         count+shard_size))
     marc_writer = marc4j.MarcStreamWriter(FileOutputStream(marc_output_filename))
+    marc_writer.setConverter(marc4j.converter.impl.AnselToUnicode())
     error_log = open('errors.log','w')
     while marc_reader.hasNext():
         try:
