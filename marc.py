@@ -6,16 +6,20 @@
   with MARC4J and SolrJ Java libraries to improve unicode processing in
   a MARC 21 record load
 """
-
-
-import csv,re,sys,time,datetime,os
-import urllib,urllib2,codecs
+__author__ = "Jeremy Nelson"
+import argparse
+import codecs
+import csv,re,sys,time,datetime
+import os
+import urllib 
+import urllib2
 PROJECT_DIR = os.getcwd()
 JAR_DIR = os.path.join(PROJECT_DIR,
                        "lib")
 for jar_file in os.listdir(JAR_DIR):
     sys.path.append(os.path.join(JAR_DIR,
                                  jar_file))
+
 import pysolr
 import xml.etree.ElementTree as et
 import java.lang.System as System
@@ -1298,4 +1302,24 @@ def csv_solr_submission(solr_url,marc_filename,ils='III'):
 ##    except IndexError:
 ##        doc = None
 ##    return doc
-
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('solr_server', help="Solr Server URL")
+    parser.add_argument('marc_location',  help="MARC21 file location")
+    args = parser.parse_args()
+    shard_walker = next(os.walk(args.marc_location))[2]
+    sharding_start = datetime.datetime.utcnow()
+    print(
+        "MARC indexing of all MARC files located at {0}".format(
+            args.marc_location))
+    print("Started at {0}".format(sharding_start.isoformat()))
+    for filename in shard_walker:
+        if os.path.splitext(filename)[1] == '.mrc':
+            py_solr_submission(args.solr_server,
+                               os.path.join(args.marc_location,
+                                            filename))
+    sharding_end = datetime.datetime.utcnow()
+    print("MARC indexing finished at {0}".format(sharding_end.isoformat()))
+    print(
+        "Indexing total time of {0} minutes".format(
+            (sharding_end - sharding_start).seconds / 60.0))
