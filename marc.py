@@ -314,7 +314,7 @@ def get_format(record):
                     elif field007[4] == 'b':
                         format = 'VHS Video'
                     else:
-                        logging.error("247 UNKNOWN field007 %s for %s" % (field007[4],record.title()))
+                        logging.error("UNKNOWN field007 {0} for record".format(field007[4]))
                 elif field007[1] == 'f':        # videocassette
                     format = 'VHS Video'
                 elif field007[1] == 'r':
@@ -781,7 +781,6 @@ def get_record(marc_record, ils=None):
         #sys.stderr.write("\nNo value in ID field, leaving ID blank\n")
         #record['id'] = ''
         # if it has no id let's not include it
-        logging.error("%s: %s not indexed because of AttributeError" % (marc_record['907']['a'],marc_record.title()))
         return
     # Checks and updates record by checking ELECTRONIC_JRNLS
     # for additional information from check-in records
